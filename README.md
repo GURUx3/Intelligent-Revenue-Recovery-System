@@ -1,58 +1,855 @@
-# Proof of Concept: Intelligent Revenue Recovery System
+# Intelligent Revenue Recovery Agent
 
-**Track:** AI Revenue Recovery
-**Submission:** Razorpay AI Buildathon 2026
+> **Don't retry everything. Don't chase everything. Recover the right money, with the right intervention, at the right time.**
+
+An AI-assisted revenue recovery agent that detects **failed payments and overdue receivables**, diagnoses why revenue is at risk, chooses the most appropriate recovery action, and executes a **bounded, auditable recovery workflow**.
+
+Built for the **Razorpay AI Buildathon 2026 — AI Revenue Recovery Track**.
 
 ---
 
-## 1. Problem Statement
+## The Problem
 
-Businesses lose recoverable revenue through two channels that are usually handled separately and poorly: failed payments (card declines, gateway timeouts, expired instruments) and overdue receivables (unpaid invoices ageing past due). Existing systems either retry failed payments blindly without judgment, or track receivables in a spreadsheet with no prioritization logic. Both approaches waste effort on unrecoverable cases and under-invest in cases that are genuinely recoverable, resulting in lost revenue and, in the receivables case, damaged customer relationships from mistimed or mistoned collection attempts.
+Revenue doesn't only disappear when a customer decides not to pay.
 
-## 2. Proposed Solution
+It gets stuck because:
 
-A recovery orchestration system that treats every failed payment and every overdue invoice as a case requiring a *reasoned recovery decision*, not a blanket action. The system ingests failure and ageing events, assigns each case a recovery action with a stated justification, executes that action through a controlled workflow, and logs every decision for audit.
+* A payment fails due to a temporary issuer or gateway problem.
+* A payment method has expired and retries are pointless.
+* A subscription payment fails repeatedly.
+* A customer abandons a checkout.
+* An invoice becomes overdue.
+* A normally reliable customer suddenly starts delaying payments.
+* Collection teams spend time chasing cases that have little chance of recovery.
 
-The system does two things most retry tools do not:
+The naive solution is usually:
 
-1. **Distinguishes recoverable from unrecoverable cases** before acting, instead of retrying everything or nothing.
-2. **Ranks and reasons about priority** — which cases to pursue first, and through what approach — based on payment history, customer relationship signals, and amount at stake.
+```text
+Payment failed → Retry
+Invoice overdue → Send reminder
+```
 
-## 3. Core Workflow
+That doesn't work well at scale.
 
-1. **Ingestion** — failed payment events and overdue invoice records enter the system with metadata: failure/error code, customer history, amount, ageing duration, prior dispute record.
-2. **Classification** — each case is assigned a recovery action (retry now, retry with backoff, requires customer action, escalate collection, write-off candidate) with a confidence score and a stated reason.
-3. **Confidence gate** — high-confidence decisions execute automatically. Low-confidence decisions fall back to a deterministic rule and are flagged for human review. No silent guessing.
-4. **Execution** — a bounded state machine carries out the action (retry with backoff and idempotency guarantees for payments; scheduled, tiered outreach for receivables), with a maximum attempt count and defined exit conditions.
-5. **Audit log** — every decision, its reasoning, and its outcome (recovered, escalated, written off) is recorded and queryable.
-6. **Reporting** — a dashboard shows money recovered, money still at risk, cases escalated to human review, and estimated cost avoided by not retrying unrecoverable cases.
+A business needs to know:
 
-## 4. AI Component
+> **Should we act? What should we do? How urgently should we do it? And when should we stop?**
 
-The AI layer performs two reasoning tasks, not model training:
+---
 
-- **Failure interpretation** — mapping raw, inconsistent gateway/bank error messages to a recovery action and confidence score, using a small labeled reference set plus reasoning over unfamiliar codes.
-- **Priority and approach reasoning** — given a case's history (amount, customer tenure, past payment behavior, dispute record), producing a ranked priority and a recommended approach (gentle reminder, firm notice, escalation), with a one-line justification per decision.
+## What We Built
 
-No custom model training or precision/recall tuning is required. The intelligence lies in structured reasoning over ambiguous inputs, gated by confidence, with deterministic fallback — a design choice made deliberately to keep the system auditable and predictable rather than opaque.
+**Intelligent Revenue Recovery Agent** turns each revenue-at-risk event into a recovery case.
 
-## 5. What Makes This Different
+```text
+Revenue At Risk
+       │
+       ▼
+   Detect Event
+       │
+       ▼
+  Diagnose Cause
+       │
+       ▼
+ Prioritize Case
+       │
+       ▼
+Recommend Action
+       │
+       ▼
+ Confidence Gate
+       │
+       ├───────────────┐
+       ▼               ▼
+   Auto Execute    Human Review
+       │
+       ▼
+Bounded Workflow
+       │
+       ▼
+ Observe Outcome
+       │
+       ▼
+Recovered / Escalated / Stopped
+       │
+       ▼
+    Audit Log
+```
 
-- **Reasoning is visible, not just output.** Every automated decision carries a human-readable justification, satisfying both the audit-trail requirement and making the system's judgment inspectable.
-- **Confidence-gated automation.** The system does not act on low-confidence classifications; it defers to rules and flags for review, which prevents compounding errors — a common failure mode in autonomous recovery tools.
-- **Idempotent, bounded execution.** Every retry or outreach action is state-checked to prevent duplicate charges or duplicate customer contact, which is where most naive implementations break under real-world conditions such as duplicate webhooks or retry storms.
+The system doesn't give an LLM unrestricted control over financial actions.
 
-## 6. Anticipated Failure Mode and Recovery
+Instead:
 
-Initial priority ranking is expected to over-weight amount owed and under-weight relationship signals, causing the system to aggressively chase high-value customers who are near-term payers while neglecting smaller, genuinely at-risk cases. This will be caught by comparing recovered-amount outcomes against a relationship-risk baseline, and corrected by re-weighting the ranking logic to favor recency and behavioral signals over raw amount. This failure-and-correction cycle will be documented with before/after decision logs as part of the submission.
+> **AI recommends. Policy decides. The workflow executes.**
 
-## 7. Success Metrics
+---
 
-- Total amount recovered (failed payments + receivables) as a percentage of total at-risk amount.
-- False-retry/false-escalation rate avoided by the confidence gate.
-- Percentage of decisions requiring human review versus fully automated.
-- Audit completeness: every recovery action traceable to a logged reason.
+# Core Capabilities
 
-## 8. Track Fit
+## 1. Failed Payment Recovery
 
-This system is evaluated on bounded workflows, measured money recovered, and honest audit trails — the exact criteria defined for the AI Revenue Recovery track. It deliberately avoids precision/recall-optimized fraud modeling, instead demonstrating engineering discipline: state management, idempotency, confidence-gated automation, and transparent decision logging.
+The system receives failed payment events and determines whether the failure is likely recoverable.
+
+Example:
+
+```text
+Payment
+₹48,000
+
+Failure:
+"Issuer temporarily unavailable"
+
+Customer history:
+12 previous successful payments
+
+AI diagnosis:
+Temporary issuer failure
+
+Recommended action:
+Retry after 30 minutes
+
+Confidence:
+94%
+```
+
+The recovery workflow then verifies policy constraints before executing the retry.
+
+If the payment succeeds:
+
+```text
+₹48,000 RECOVERED
+```
+
+If it continues failing, the workflow moves to the next permitted state rather than retrying indefinitely.
+
+---
+
+## 2. Overdue Receivables Recovery
+
+Invoices are evaluated using more than just the amount owed.
+
+The system considers signals such as:
+
+* Invoice amount
+* Ageing
+* Customer payment history
+* Customer tenure
+* Previous delays
+* Reminder history
+* Disputes
+* Previous recovery outcomes
+
+Example:
+
+### Customer A
+
+```text
+Invoice: ₹3,00,000
+Overdue: 29 days
+
+History:
+24 invoices
+22 paid on time
+Average delay: 3 days
+No previous disputes
+```
+
+Recommended action:
+
+```text
+HIGH PRIORITY
+Gentle reminder
+```
+
+Because the current delay is unusual for this customer.
+
+### Customer B
+
+```text
+Invoice: ₹80,000
+Overdue: 12 days
+
+History:
+Repeated late payments
+Multiple ignored reminders
+Previous disputes
+```
+
+Recommended action:
+
+```text
+CRITICAL
+Escalation
+```
+
+The system therefore prioritizes **recoverability and risk**, not simply invoice size.
+
+---
+
+# AI Decision Layer
+
+The AI is used for structured reasoning rather than unrestricted execution.
+
+### Diagnosis
+
+Convert ambiguous gateway/payment errors into a structured interpretation.
+
+```text
+Raw error
+    ↓
+AI diagnosis
+    ↓
+Failure category
+    ↓
+Recommended recovery action
+```
+
+### Prioritization
+
+Evaluate the context around a recovery case and determine its relative priority.
+
+### Strategy
+
+Recommend the appropriate intervention:
+
+```text
+Retry
+Retry with backoff
+Customer action required
+Gentle reminder
+Firm reminder
+Escalation
+Write-off candidate
+```
+
+### Explanation
+
+Every decision includes a human-readable reason.
+
+Example:
+
+```json
+{
+  "action": "retry",
+  "priority": "high",
+  "confidence": 0.94,
+  "reason": "Temporary issuer failure with strong historical payment behavior."
+}
+```
+
+---
+
+# Confidence-Gated Automation
+
+AI should not automatically execute every decision.
+
+The system places a deterministic gate between the AI recommendation and the financial workflow.
+
+```text
+             AI Recommendation
+                    │
+                    ▼
+             Confidence Gate
+                    │
+          ┌─────────┴─────────┐
+          │                   │
+       High                   Low
+          │                   │
+          ▼                   ▼
+   Policy Validation     Deterministic
+          │               Fallback
+          │                   │
+          ▼                   ▼
+      Execute             Human Review
+```
+
+For example:
+
+```text
+Confidence = 0.94
+Threshold  = 0.85
+
+→ Eligible for automated execution
+```
+
+But:
+
+```text
+Confidence = 0.52
+
+→ No autonomous financial action
+→ Fallback / human review
+```
+
+This keeps AI inside clearly defined boundaries.
+
+---
+
+# Bounded Recovery Workflows
+
+Every recovery action operates inside explicit limits.
+
+### Payment recovery
+
+```text
+Maximum retries: 3
+
+STOP IF:
+✓ Payment succeeds
+✓ Customer action is required
+✓ Permanent failure detected
+✓ Maximum attempts reached
+✓ Case is already resolved
+```
+
+### Receivables recovery
+
+```text
+STOP OUTREACH IF:
+✓ Payment received
+✓ Invoice disputed
+✓ Promise-to-pay accepted
+✓ Maximum contact attempts reached
+✓ Escalation threshold reached
+✓ Collection window expires
+```
+
+The system is designed so that **recovery does not become an infinite retry or messaging loop**.
+
+---
+
+# Idempotency
+
+Financial workflows must handle duplicate events safely.
+
+For example, a payment gateway could deliver the same failure event more than once.
+
+Instead of:
+
+```text
+Webhook
+   ↓
+Retry
+   ↓
+Duplicate webhook
+   ↓
+Retry again
+```
+
+the system maintains recovery-case state and verifies:
+
+```text
+Is this case already resolved?
+
+Is another action already scheduled?
+
+Has the maximum attempt count been reached?
+
+Has this action already been executed?
+```
+
+Only valid state transitions are allowed.
+
+---
+
+# Recovery State Machine
+
+Each recovery case moves through explicit states.
+
+```text
+                ┌─────────────┐
+                │   DETECTED  │
+                └──────┬──────┘
+                       ↓
+                ┌─────────────┐
+                │  DIAGNOSED  │
+                └──────┬──────┘
+                       ↓
+                ┌─────────────┐
+                │   DECIDED   │
+                └──────┬──────┘
+                       ↓
+                ┌─────────────┐
+                │   APPROVED  │
+                └──────┬──────┘
+                       ↓
+                ┌─────────────┐
+                │  EXECUTING  │
+                └──────┬──────┘
+                       ↓
+             ┌─────────┴─────────┐
+             ↓                   ↓
+        RECOVERED            NOT RECOVERED
+                                 │
+                                 ↓
+                         NEXT VALID ACTION
+                                 │
+                                 ↓
+                        ESCALATE / STOP
+```
+
+This makes every automated action traceable and predictable.
+
+---
+
+# Audit Trail
+
+Every important decision is recorded.
+
+Example:
+
+```text
+11:02:01  Payment failure received
+11:02:02  Recovery case created
+11:02:03  Failure diagnosed
+11:02:03  Confidence = 94%
+11:02:03  Retry approved by policy
+11:02:04  Retry scheduled
+11:32:04  Retry executed
+11:32:05  Payment succeeded
+11:32:05  Case marked RECOVERED
+```
+
+A reviewer can answer:
+
+* What happened?
+* Why did the system make this decision?
+* What did the AI recommend?
+* Was the recommendation trusted?
+* What action was executed?
+* How many attempts occurred?
+* What was the final outcome?
+
+---
+
+# Measuring Recovery
+
+The system is evaluated on a batch of revenue-at-risk cases rather than individual cherry-picked examples.
+
+Example:
+
+```text
+Total revenue at risk       ₹18.4L
+Cases                       1,000
+
+Recovered                   ₹4.82L
+Recovery rate               26.2%
+
+Escalated                   ₹3.20L
+Pending                     ₹3.14L
+Write-off candidates        ₹4.36L
+```
+
+The primary metric is:
+
+```text
+Recovery Rate =
+Amount Recovered
+----------------
+Total Amount At Risk
+```
+
+The system can also compare its results against a simple baseline such as blind retrying or generic collection rules.
+
+This allows us to measure whether intelligent recovery actually improves outcomes.
+
+---
+
+# Recovery Economics
+
+Not every recovery attempt is worth pursuing.
+
+The system can estimate whether an intervention makes economic sense.
+
+Conceptually:
+
+```text
+Expected Recovery Value
+=
+Amount At Risk
+×
+Estimated Recovery Probability
+−
+Intervention Cost
+```
+
+For example:
+
+```text
+₹5,000 case
+90% recovery probability
+Low intervention cost
+
+→ Pursue
+```
+
+versus:
+
+```text
+₹500 case
+15% recovery probability
+High intervention cost
+
+→ Avoid aggressive intervention
+```
+
+This prevents the system from optimizing only for the total amount owed.
+
+---
+
+# Learning From Failure
+
+The system is designed to expose where its initial strategy performs poorly.
+
+For example, an initial prioritization strategy may over-weight invoice amount:
+
+```text
+Priority =
+60% Amount
+20% Ageing
+20% History
+```
+
+This can cause the system to aggressively pursue large but reliable customers while ignoring smaller accounts with much higher collection risk.
+
+A behavior-aware strategy can then be evaluated:
+
+```text
+Priority =
+30% Amount
+25% Ageing
+30% Payment Behavior
+15% Relationship / Risk
+```
+
+The two strategies can be evaluated on the same batch to measure the impact on recovery outcomes.
+
+---
+
+# Why This Is Different
+
+Most simple recovery systems follow:
+
+```text
+Failure → Retry
+Overdue → Reminder
+```
+
+This project instead follows:
+
+```text
+Detect
+  ↓
+Understand
+  ↓
+Prioritize
+  ↓
+Choose intervention
+  ↓
+Check confidence
+  ↓
+Apply policy
+  ↓
+Execute safely
+  ↓
+Observe outcome
+  ↓
+Recover / Escalate / Stop
+```
+
+### The key design principles are:
+
+**1. AI-assisted, not AI-uncontrolled**
+
+The model recommends actions; deterministic policies control execution.
+
+**2. Confidence-gated**
+
+Uncertain AI decisions don't automatically trigger financial actions.
+
+**3. Bounded**
+
+Retries and customer outreach have explicit limits and stopping conditions.
+
+**4. Idempotent**
+
+Duplicate events should not create duplicate financial actions.
+
+**5. Auditable**
+
+Every decision has a reason, state transition, action, and outcome.
+
+**6. Outcome-driven**
+
+The system is measured by actual recovery across a batch, not by how impressive the AI response looks.
+
+---
+
+# Architecture
+
+```text
+                       ┌──────────────────────┐
+                       │  Razorpay / Simulator │
+                       │       Events          │
+                       └──────────┬───────────┘
+                                  │
+                                  ▼
+                       ┌──────────────────────┐
+                       │   Event Ingestion    │
+                       └──────────┬───────────┘
+                                  │
+                                  ▼
+                       ┌──────────────────────┐
+                       │   Recovery Case DB   │
+                       └──────────┬───────────┘
+                                  │
+                                  ▼
+                       ┌──────────────────────┐
+                       │    Recovery Agent    │
+                       │                      │
+                       │ Diagnose             │
+                       │ Prioritize            │
+                       │ Recommend             │
+                       └──────────┬───────────┘
+                                  │
+                                  ▼
+                       ┌──────────────────────┐
+                       │   Confidence Gate    │
+                       └──────────┬───────────┘
+                                  │
+                                  ▼
+                       ┌──────────────────────┐
+                       │    Policy Engine     │
+                       │                      │
+                       │ Limits               │
+                       │ Cooldowns            │
+                       │ Idempotency          │
+                       │ Stopping Rules       │
+                       └──────────┬───────────┘
+                                  │
+                                  ▼
+                       ┌──────────────────────┐
+                       │  Workflow Executor   │
+                       └──────────┬───────────┘
+                                  │
+                    ┌─────────────┼─────────────┐
+                    ▼             ▼             ▼
+                 Retry         Notify       Escalate
+                    │             │             │
+                    └─────────────┼─────────────┘
+                                  │
+                                  ▼
+                       ┌──────────────────────┐
+                       │   Outcome Processor  │
+                       └──────────┬───────────┘
+                                  │
+                                  ▼
+                       ┌──────────────────────┐
+                       │     Audit Log        │
+                       └──────────┬───────────┘
+                                  │
+                                  ▼
+                       ┌──────────────────────┐
+                       │ Recovery Dashboard   │
+                       └──────────────────────┘
+```
+
+---
+
+# Example Recovery Case
+
+### Input
+
+```text
+Payment ID: pay_8291
+Amount: ₹48,000
+Customer: Acme Corp
+
+Failure:
+Issuer temporarily unavailable
+
+Previous successful payments:
+12
+```
+
+### Agent decision
+
+```text
+Diagnosis:
+Temporary issuer failure
+
+Action:
+Retry after 30 minutes
+
+Priority:
+High
+
+Confidence:
+94%
+
+Reason:
+Temporary issuer failure combined with strong historical
+payment behavior indicates a high probability of recovery.
+```
+
+### Policy decision
+
+```text
+✓ Confidence above threshold
+✓ Retry limit not reached
+✓ No existing retry scheduled
+✓ Payment not already recovered
+
+→ APPROVED
+```
+
+### Execution
+
+```text
+Retry scheduled
+      ↓
+30 minutes
+      ↓
+Retry executed
+      ↓
+Payment successful
+      ↓
+₹48,000 recovered
+```
+
+### Final state
+
+```text
+RECOVERED
+
+Amount recovered: ₹48,000
+Attempts: 1
+Recovery action: Automatic retry
+```
+
+---
+
+# Buildathon Track
+
+This project is built for:
+
+**Razorpay AI Buildathon 2026 — Track 03: AI Revenue Recovery**
+
+Razorpay defines this track around detecting revenue at risk, determining the appropriate intervention, and executing a bounded recovery workflow. The stated evaluation bar includes **measured money recovered across a batch, compliant escalation, stopping rules, and an audit trail**.
+
+The project follows those principles by combining:
+
+```text
+AI Reasoning
++
+Deterministic Guardrails
++
+Bounded Workflows
++
+Measured Recovery
++
+Auditability
+```
+
+Razorpay's broader 2026 agentic direction also includes AI agents for revenue recovery and financial operations, making controlled, action-oriented recovery workflows particularly relevant to the problem space.
+
+---
+
+# Project Status
+
+🚧 **Proof of Concept — In Development**
+
+### Current focus
+
+* [ ] Revenue-at-risk case model
+* [ ] Failed payment recovery concept
+* [ ] Overdue receivables recovery concept
+* [ ] AI-assisted diagnosis
+* [ ] Confidence-gated decisions
+* [ ] Bounded recovery workflows
+* [ ] Idempotency strategy
+* [ ] Audit trail design
+* [ ] Recovery agent implementation
+* [ ] Batch simulation
+* [ ] Baseline vs intelligent recovery experiment
+* [ ] Razorpay test-mode integration
+* [ ] Recovery dashboard
+* [ ] End-to-end demo
+
+---
+
+# Demo
+
+**Live Demo:** Coming soon
+
+**Pitch Video:** Coming soon
+
+**Architecture:** Coming soon
+
+---
+
+# Tech Stack
+
+> Final implementation may evolve during development.
+
+```text
+Backend
+- [Backend framework]
+
+Database
+- PostgreSQL
+
+AI
+- LLM-based structured reasoning
+
+Payments
+- Razorpay Test Mode APIs
+
+Workflow
+- Event-driven recovery state machine
+
+Frontend
+- [Frontend framework]
+
+Infrastructure
+- Docker
+- [Deployment platform]
+```
+
+---
+
+# Design Philosophy
+
+This project is intentionally **not** trying to make an LLM the source of truth for financial operations.
+
+The design principle is:
+
+```text
+              AI
+              │
+       Intelligence
+              │
+              ▼
+       ┌────────────┐
+       │   Policy   │
+       │  Guardrail │
+       └─────┬──────┘
+             │
+             ▼
+          Action
+             │
+             ▼
+          Outcome
+             │
+             ▼
+          Evidence
+```
+
+**AI provides intelligence.**
+**The system keeps control of money.**
+
+---
+
+# License
+
+This project is built as a prototype for the Razorpay AI Buildathon 2026.
